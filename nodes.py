@@ -49,7 +49,8 @@ class PaddleOCR_Node:
                  ocr = PaddleOCR(
                      use_textline_orientation=vertical_direction, 
                      lang=language,
-                     ocr_version=ocr_version
+                     ocr_version=ocr_version,
+                     enable_mkldnn=False
                  )
             except TypeError as e:
                  print(f"DEBUG: Initialization TypeError: {e}")
@@ -57,9 +58,9 @@ class PaddleOCR_Node:
                  # We try 'use_angle_cls' if 'use_textline_orientation' fails, etc.
                  # But since the user is using the Pipeline wrapper, the above SHOULD work.
                  try:
-                     ocr = PaddleOCR(use_angle_cls=vertical_direction, lang=language)
+                     ocr = PaddleOCR(use_angle_cls=vertical_direction, lang=language, enable_mkldnn=False)
                  except:
-                     ocr = PaddleOCR(lang=language)
+                     ocr = PaddleOCR(lang=language, enable_mkldnn=False)
             
             # process
             cv_images = tensor_to_cv2_img(image)
