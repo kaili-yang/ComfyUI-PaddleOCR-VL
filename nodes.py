@@ -271,3 +271,192 @@ class PaddleOCRVL_Node:
             traceback.print_exc()
             raise RuntimeError(f"PaddleOCR-VL Failed: {e}")
 
+class PaddleOCR_Unified_Node:
+    """
+    Reviewer: User (Designer)
+    Concept: Consistency Principle & Task-Based UX.
+    A single node acting as a facade for all PaddleOCR capabilities.
+    """
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "task_mode": ([
+                    "document_parsing",   # Default: Layout analysis + Markdown
+                    "book_scanning",      # Unwarping + Orientation
+                    "packaging_active",   # Seal recognition + Multi-angle
+                    "standard_ocr"        # Pure Text (Fast)
+                ], {"default": "document_parsing"}),
+                "language": (["ch", "en", "japan", "korean", "chinese_cht", "french", "german"], {"default": "ch"}),
+            },
+            "optional": {
+                "structure_tags": ("BOOLEAN", {"default": True, "label_on": "Include Format Tags", "label_off": "Plain Content"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "JSON")
+    RETURN_NAMES = ("markdown", "plain_text", "json_output")
+    FUNCTION = "apply_unified_ocr"
+    CATEGORY = "PaddleOCR"
+
+    def apply_unified_ocr(self, image, task_mode, language, structure_tags):
+        hw_kwargs = get_paddle_hw_kwargs()
+        print(f"DEBUG: Unified Node - Task: {task_mode}, Lang: {language}, HW: {hw_kwargs}")
+
+        try:
+            cv_images = tensor_to_cv2_img(image)
+            results_md = []
+            results_txt = []
+            results_json = []
+
+            # --- Strategy 1: VL Engine (Complex Tasks) ---
+            if task_mode in ["document_parsing", "book_scanning", "packaging_active"]:
+                if PaddleOCRVL is None:
+                    raise ImportError("PaddleOCR VL module not found. Please upgrade paddleocr.")
+                
+                # Preset Configurations
+                vl_args = {
+                    "use_layout_detection": False,
+                    "use_doc_orientation_classify": False,
+                    "use_doc_unwarping": False,
+                    "use_seal_recognition": False,
+                    "use_chart_recognition": False
+                }
+
+                if task_mode == "document_parsing":
+                    vl_args["use_layout_detection"] = True
+                    vl_args["use_chart_recognition"] = True # Often useful in docs
+                elif task_mode == "book_scanning":
+                    vl_args["use_doc_unwarping"] = True
+                    vl_args["use_doc_orientation_classify"] = True
+                    vl_args["use_layout_detection"] = True # Usually want layout too
+                elif task_mode == "packaging_active":
+                    vl_args["use_seal_recognition"] = True
+                    vl_args["use_doc_orientation_classify"] = True
+
+                # Init Pipeline
+                pipeline = PaddleOCRVL(**vl_args, **hw_kwargs)
+
+                for img_numpy in cv_images:
+                    res_list = pipeline.predict(img_numpy)
+                    
+                    for res in res_list:
+                        # Inspect result structure (it's often a complex object in VL 1.5)
+                        # We try to extract best representation
+                        
+                        # 1. JSON/Dict
+                        # PaddleOCRVL results typically have an internal structure. 
+                        # We'll try to dump it or use a provided method.
+                        # For V1.5, let's assume standard dict-like access or helper
+                        res_dict = {}
+                        if hasattr(res, 'json'):
+                            res_dict = res.json 
+                        elif isinstance(res, dict):
+                            res_dict = res
+                        else:
+                            # Fallback: try using `str` or `__dict__`
+                            try:
+                                res_dict = res.__dict__ 
+                            except:
+                                res_dict = {"raw": str(res)}
+                        results_json.append(res_dict)
+
+                        # 2. Markdown / Text
+                        # Previous analysis suggested `save_to_markdown` or property.
+                        # VL 1.5 pipeline usually returns structured objects that can be saved.
+                        # We'll rely on string casting which usually gives the structure for VL models,
+                        # or specific keys if known. 
+                        # Since we don't have the exact object inspection at runtime, 
+                        # we assume `str(res)` gives the markdown-like representation,
+                        # OR check for keys like 'markdown', 'html', 'text'.
+                        
+                        md_text = ""
+                        raw_text = ""
+
+                        # Heuristic data extraction
+                        if isinstance(res_dict, dict):
+                             # Look for common keys
+                             if 'markdown' in res_dict:
+                                 md_text = res_dict['markdown']
+                             elif 'html' in res_dict:
+                                 md_text = res_dict['html'] # Close enough
+                             elif 'rec_text' in res_dict:
+                                 md_text = res_dict['rec_text']
+                             
+                             if 'text' in res_dict:
+                                 raw_text = res_dict['text']
+                             elif 'rec_text' in res_dict:
+                                 raw_text = res_dict['rec_text']
+                        
+                        if not md_text:
+                            md_text = str(res) # Robust fallback
+                        if not raw_text:
+                            # Strip basic MD tags if fallback used (simplified)
+                            raw_text = md_text.replace('#', '').replace('*', '')
+
+                        results_md.append(md_text)
+                        results_txt.append(raw_text)
+
+            # --- Strategy 2: Standard OCR (Fast/Pure) ---
+            else: # standard_ocr
+                if PaddleOCR is None:
+                     raise ImportError("PaddleOCR not installed.")
+                
+                # Standard V5 init
+                ocr = PaddleOCR(ocr_version='PP-OCRv5', lang=language, **hw_kwargs)
+                
+                for img_numpy in cv_images:
+                    result = ocr.ocr(img_numpy) 
+                    # Result structure: [[[[x1,y1],[x2,y2]..], ("text", score)], ...]
+                    
+                    page_md = []
+                    page_txt = []
+                    page_json = []
+                    
+                    if result:
+                         # Handle batch wrapper if needed
+                         if isinstance(result, list) and len(result)>0 and isinstance(result[0], list) and isinstance(result[0][0], list):
+                             lines = result[0]
+                         else:
+                             lines = result
+                         
+                         for line in lines:
+                             # line: [box, (text, score)]
+                             if len(line) >= 2:
+                                 text_info = line[1]
+                                 text = text_info[0]
+                                 score = text_info[1]
+                                 box = line[0]
+                                 
+                                 page_txt.append(text)
+                                 # Markdown: standard lines. maybe bold if high confidence?
+                                 page_md.append(f"- {text}") 
+                                 
+                                 page_json.append({
+                                     "text": text,
+                                     "confidence": float(score),
+                                     "box": box
+                                 })
+                    
+                    results_md.append("\n".join(page_md))
+                    results_txt.append("\n".join(page_txt))
+                    results_json.append(page_json)
+
+            # Final Aggregation
+            final_md = "\n\n--- Page Break ---\n\n".join(results_md)
+            final_txt = "\n\n".join(results_txt)
+            
+            # JSON needs to be serialize-safe
+            import json
+            try:
+                final_json_str = json.dumps(results_json, ensure_ascii=False, indent=2)
+            except:
+                final_json_str = str(results_json)
+
+            return (final_md, final_txt, final_json_str)
+
+        except Exception as e:
+            traceback.print_exc()
+            raise RuntimeError(f"Unified OCR Failed: {e}")
+
