@@ -2,7 +2,7 @@
 import sys
 import os
 import traceback
-from .utils import tensor_to_cv2_img
+from .utils import tensor_to_cv2_img, get_paddle_hw_kwargs
 
 # Attempt to import PaddleOCR
 try:
@@ -50,12 +50,16 @@ class PaddleOCR_Node:
             # Instantiate PaddleOCR
             # We pass 'use_textline_orientation' (which vertical_direction maps to)
             # and 'ocr_version' to let the internal logic handle model selection.
+            # Get hardware kwargs (handles GPU/CPU/OneDNN automatically)
+            hw_kwargs = get_paddle_hw_kwargs()
+            print(f"DEBUG: Hardware Kwargs: {hw_kwargs}")
+
             try:
                  ocr = PaddleOCR(
                      use_textline_orientation=vertical_direction, 
                      lang=language,
                      ocr_version=ocr_version,
-                     enable_mkldnn=False
+                     **hw_kwargs
                  )
             except TypeError as e:
                  print(f"DEBUG: Initialization TypeError: {e}")
@@ -63,9 +67,9 @@ class PaddleOCR_Node:
                  # We try 'use_angle_cls' if 'use_textline_orientation' fails, etc.
                  # But since the user is using the Pipeline wrapper, the above SHOULD work.
                  try:
-                     ocr = PaddleOCR(use_angle_cls=vertical_direction, lang=language, enable_mkldnn=False)
+                     ocr = PaddleOCR(use_angle_cls=vertical_direction, lang=language, **hw_kwargs)
                  except:
-                     ocr = PaddleOCR(lang=language, enable_mkldnn=False)
+                     ocr = PaddleOCR(lang=language, **hw_kwargs)
             
             # process
             cv_images = tensor_to_cv2_img(image)
@@ -177,14 +181,16 @@ class PaddleOCRVL_Node:
 
         try:
             # Initialize Pipeline
-            # We explicitly disable MKLDNN to prevent Windows crashes, consistent with the main node.
+            # Use shared hardware logic 
+            hw_kwargs = get_paddle_hw_kwargs()
+            
             pipeline = PaddleOCRVL(
                 use_layout_detection=use_layout_detection,
                 use_doc_orientation_classify=use_doc_orientation_classify,
                 use_doc_unwarping=use_doc_unwarping,
                 use_chart_recognition=use_chart_recognition,
                 use_seal_recognition=use_seal_recognition,
-                enable_mkldnn=False 
+                **hw_kwargs
             )
 
             # Process Image
