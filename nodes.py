@@ -292,6 +292,8 @@ class PaddleOCR_Unified_Node:
             },
             "optional": {
                 "structure_tags": ("BOOLEAN", {"default": True, "label_on": "Include Format Tags", "label_off": "Plain Content"}),
+                "use_tensorrt": ("BOOLEAN", {"default": False, "label_on": "Enable TensorRT (Faster)", "label_off": "Disable TensorRT"}),
+                "precision": (["fp32", "fp16", "int8"], {"default": "fp32"}),
             }
         }
 
@@ -300,8 +302,15 @@ class PaddleOCR_Unified_Node:
     FUNCTION = "apply_unified_ocr"
     CATEGORY = "PaddleOCR"
 
-    def apply_unified_ocr(self, image, task_mode, language, structure_tags):
+    def apply_unified_ocr(self, image, task_mode, language, structure_tags, use_tensorrt, precision):
         hw_kwargs = get_paddle_hw_kwargs()
+        
+        # Inject user overrides for high-end optimization
+        if use_tensorrt:
+            hw_kwargs["use_tensorrt"] = True
+            hw_kwargs["precision"] = precision
+            print(f"DEBUG: TensorRT Enabled with precision {precision}")
+            
         print(f"DEBUG: Unified Node - Task: {task_mode}, Lang: {language}, HW: {hw_kwargs}")
 
         try:
